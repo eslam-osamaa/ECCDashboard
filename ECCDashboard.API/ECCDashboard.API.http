@@ -1,0 +1,6 @@
+@ECCDashboard.API_HostAddress = http://localhost:5180
+
+GET {{ECCDashboard.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
