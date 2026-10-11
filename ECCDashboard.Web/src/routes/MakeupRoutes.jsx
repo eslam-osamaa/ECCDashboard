@@ -1,5 +1,6 @@
 import AddMakeupFormulation from "../pages/Makeup/AddFormulation";
 import Makeup from "../pages/Makeup/Makeup";
+import EditMakeupFormulation from "../pages/Makeup/EditFormulation";
 
 const MakeupRoutes = [
   {
@@ -9,6 +10,10 @@ const MakeupRoutes = [
   {
     path: "/makeup/add",
     element: <AddMakeupFormulation />,
+  },
+  {
+    path: "/makeup/edit/:sfg",
+    element: <EditMakeupFormulation />,
   },
 ];
 

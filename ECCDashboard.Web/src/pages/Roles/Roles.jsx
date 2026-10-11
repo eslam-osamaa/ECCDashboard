@@ -36,6 +36,7 @@ function Roles() {
             const data = await getRoles({
                 page,
                 pageSize,
+                search,
             });
 
             setRoles(data.items || []);
@@ -57,7 +58,7 @@ function Roles() {
 
     useEffect(() => {
         loadRoles();
-    }, [page, pageSize]);
+    }, [page, pageSize, search]);
 
     const totalPages = Math.ceil(totalCount / pageSize);
 
@@ -89,8 +90,6 @@ function Roles() {
 
             showToast("success", "Role deleted successfully.");
 
-            // If this was the last row on the current page,
-            // move back one page instead of showing an empty table.
             if (roles.length === 1 && page > 1) {
                 setPage((currentPage) => currentPage - 1);
             } else {

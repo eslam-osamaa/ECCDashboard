@@ -1,4 +1,3 @@
-
 namespace ECCDashboard.API.DTOs.Formulations;
 
 public class FormulationResponseDto

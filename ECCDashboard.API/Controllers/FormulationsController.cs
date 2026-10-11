@@ -1,4 +1,3 @@
-
 using System.Security.Claims;
 using System.Text.Json;
 using ECCDashboard.API.Data;
@@ -15,149 +14,197 @@ namespace ECCDashboard.API.Controllers;
 [Route("api/formulations")]
 public class FormulationsController : ControllerBase
 {
+    private const string CosmeticsType = "Cosmetics";
+    private const string MakeupType = "Makeup";
+
+    private static readonly string[] AllowedStatuses =
+    {
+        "Still", "Uploading", "Production", "Done", "Modification", "Problem"
+    };
+
     private readonly AppDbContext _context;
     private readonly IAuthorizationService _authorizationService;
+    private readonly ILogger<FormulationsController> _logger;
 
     public FormulationsController(
         AppDbContext context,
-        IAuthorizationService authorizationService)
+        IAuthorizationService authorizationService,
+        ILogger<FormulationsController> logger)
     {
         _context = context;
         _authorizationService = authorizationService;
+        _logger = logger;
     }
 
     // ==========================================
-    // GET COSMETICS WITH PAGINATION
+    // GET COSMETICS
     // ==========================================
 
     [HttpGet("cosmetics")]
     [Authorize(Policy = "Permission:View Cosmetics")]
-    public async Task<IActionResult> GetCosmetics(
+    public Task<IActionResult> GetCosmetics(
         [FromQuery] PaginationRequest request,
         [FromQuery] string? parentCode,
-        [FromQuery] string? status)
-    {
-        var query = _context.Formulations
-            .AsNoTracking()
-            .Where(f => f.Type == "Cosmetics");
-
-        if (!string.IsNullOrWhiteSpace(request.Search))
-        {
-            var search = request.Search.Trim();
-            query = query.Where(f => f.SFG.Contains(search));
-        }
-
-        if (!string.IsNullOrWhiteSpace(parentCode))
-        {
-            var code = parentCode.Trim();
-            query = query.Where(f => f.ParentCode.Contains(code));
-        }
-
-        if (!string.IsNullOrWhiteSpace(status) &&
-            !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
-        {
-            var selectedStatus = status.Trim();
-            query = query.Where(f => f.Status == selectedStatus);
-        }
-
-        var totalCount = await query.CountAsync();
-
-        var page = Math.Max(1, request.Page);
-        var pageSize = Math.Clamp(request.PageSize, 1, 100);
-
-        var formulations = await query
-            .OrderBy(f => f.SFG)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(f => new FormulationResponseDto
-            {
-                SFG = f.SFG,
-                ParentCode = f.ParentCode,
-                Description = f.Description,
-                Type = f.Type,
-                Status = f.Status,
-                LastModified = f.LastModified,
-
-                RawMaterials = f.RawMaterials
-                    .Select(rm => new RawMaterialResponseDto
-                    {
-                        Id = rm.Id,
-                        Code = rm.Code,
-                        Description = rm.Description,
-                        Percentage = rm.Percentage
-                    })
-                    .ToList()
-            })
-            .ToListAsync();
-
-        return Ok(new PaginationResponse<FormulationResponseDto>
-        {
-            Items = formulations,
-            TotalCount = totalCount,
-            Page = page,
-            PageSize = pageSize
-        });
-    }
+        [FromQuery] string? status,
+        [FromQuery] string? description)
+        => GetFormulationsByTypeAsync(
+            request, CosmeticsType, parentCode, status, description);
 
     // ==========================================
-    // GET MAKEUP WITH PAGINATION
+    // GET MAKEUP
     // ==========================================
 
     [HttpGet("makeup")]
     [Authorize(Policy = "Permission:View Makeup")]
-    public async Task<IActionResult> GetMakeup(
-        [FromQuery] PaginationRequest request)
+    public Task<IActionResult> GetMakeup(
+        [FromQuery] PaginationRequest request,
+        [FromQuery] string? parentCode,
+        [FromQuery] string? status,
+        [FromQuery] string? description)
+        => GetFormulationsByTypeAsync(
+            request, MakeupType, parentCode, status, description);
+
+    // ==========================================
+    // GET SINGLE FORMULATION BY SFG
+    // ==========================================
+
+    [HttpGet("{sfg}")]
+    [Authorize]
+    public async Task<IActionResult> GetBySfg(string sfg)
     {
-        var query = _context.Formulations
-            .AsNoTracking()
-            .Where(f => f.Type == "Makeup");
-
-        if (!string.IsNullOrWhiteSpace(request.Search))
+        try
         {
-            var search = request.Search.Trim();
+            sfg = sfg.Trim().ToUpperInvariant();
 
-            query = query.Where(f =>
-                f.SFG.Contains(search) ||
-                f.Description.Contains(search) ||
-                f.ParentCode.Contains(search));
-        }
+            var formulation = await _context.Formulations
+                .AsNoTracking()
+                .Include(f => f.RawMaterials)
+                .FirstOrDefaultAsync(f => f.SFG == sfg);
 
-        var totalCount = await query.CountAsync();
-        var page = Math.Max(1, request.Page);
-        var pageSize = Math.Clamp(request.PageSize, 1, 100);
+            if (formulation == null)
+                return NotFound(new { message = $"Formulation {sfg} was not found." });
 
-        var formulations = await query
-            .OrderBy(f => f.SFG)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(f => new FormulationResponseDto
+            var permission = formulation.Type switch
             {
-                SFG = f.SFG,
-                ParentCode = f.ParentCode,
-                Description = f.Description,
-                Type = f.Type,
-                Status = f.Status,
-                LastModified = f.LastModified,
+                CosmeticsType => "Permission:View Cosmetics",
+                MakeupType => "Permission:View Makeup",
+                _ => null
+            };
 
-                RawMaterials = f.RawMaterials
-                    .Select(rm => new RawMaterialResponseDto
-                    {
-                        Id = rm.Id,
-                        Code = rm.Code,
-                        Description = rm.Description,
-                        Percentage = rm.Percentage
-                    })
-                    .ToList()
-            })
-            .ToListAsync();
+            if (permission == null)
+                return BadRequest(new { message = "Formulation type is not classified." });
 
-        return Ok(new PaginationResponse<FormulationResponseDto>
+            var authResult = await _authorizationService.AuthorizeAsync(User, permission);
+
+            if (!authResult.Succeeded)
+                return Forbid();
+
+            return Ok(ToResponse(formulation, includeRawMaterials: true));
+        }
+        catch (Exception ex)
         {
-            Items = formulations,
-            TotalCount = totalCount,
-            Page = page,
-            PageSize = pageSize
-        });
+            _logger.LogError(ex, "GetBySfg failed. SFG={SFG}", sfg);
+            return StatusCode(500, new
+            {
+                message = "Failed to load formulation.",
+                error = ex.Message,
+                type = ex.GetType().FullName,
+                inner = ex.InnerException?.Message
+            });
+        }
+    }
+
+    // ==========================================
+    // SHARED: GET FORMULATIONS BY TYPE
+    // ==========================================
+
+    private async Task<IActionResult> GetFormulationsByTypeAsync(
+        PaginationRequest request,
+        string type,
+        string? parentCode,
+        string? status,
+        string? description)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Get {Type} started. Page={Page}, PageSize={PageSize}, Search={Search}, Description={Description}, ParentCode={ParentCode}, Status={Status}",
+                type, request.Page, request.PageSize, request.Search,
+                description, parentCode, status);
+
+            var query = _context.Formulations
+                .AsNoTracking()
+                .Where(f => f.Type == type);
+
+            if (!string.IsNullOrWhiteSpace(request.Search))
+            {
+                var search = request.Search.Trim();
+                query = query.Where(f => f.SFG.Contains(search));
+            }
+
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                var desc = description.Trim();
+                query = query.Where(f => f.Description.Contains(desc));
+            }
+
+            if (!string.IsNullOrWhiteSpace(parentCode))
+            {
+                var code = parentCode.Trim();
+                query = query.Where(f => f.ParentCode.Contains(code));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status) &&
+                !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                var selectedStatus = status.Trim();
+                query = query.Where(f => f.Status == selectedStatus);
+            }
+
+            var totalCount = await query.CountAsync();
+
+            var page = Math.Max(1, request.Page);
+            var pageSize = Math.Clamp(request.PageSize, 1, 100);
+
+            var formulations = await query
+                .OrderBy(f => f.SFG)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(f => new FormulationResponseDto
+                {
+                    SFG = f.SFG,
+                    ParentCode = f.ParentCode,
+                    Description = f.Description,
+                    Type = f.Type,
+                    Status = f.Status,
+                    LastModified = f.LastModified,
+                    RawMaterials = new List<RawMaterialResponseDto>()
+                })
+                .ToListAsync();
+
+            _logger.LogInformation(
+                "Get {Type} completed. TotalCount={TotalCount}, Returned={Returned}",
+                type, totalCount, formulations.Count);
+
+            return Ok(new PaginationResponse<FormulationResponseDto>
+            {
+                Items = formulations,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Get{Type} failed.", type);
+            return StatusCode(500, new
+            {
+                message = $"Failed to load {type.ToLowerInvariant()} formulations.",
+                error = ex.Message,
+                type = ex.GetType().FullName,
+                inner = ex.InnerException?.Message
+            });
+        }
     }
 
     // ==========================================
@@ -166,11 +213,9 @@ public class FormulationsController : ControllerBase
 
     [HttpPost("cosmetics/initial")]
     [Authorize(Policy = "Permission:Add Cosmetics")]
-    public async Task<IActionResult> CreateInitialCosmetics(
+    public Task<IActionResult> CreateInitialCosmetics(
         [FromBody] InitialFormulationRequest request)
-    {
-        return await CreateInitial(request, "Cosmetics");
-    }
+        => CreateInitialAsync(request, CosmeticsType);
 
     // ==========================================
     // CREATE INITIAL MAKEUP
@@ -178,11 +223,9 @@ public class FormulationsController : ControllerBase
 
     [HttpPost("makeup/initial")]
     [Authorize(Policy = "Permission:Add Makeup")]
-    public async Task<IActionResult> CreateInitialMakeup(
+    public Task<IActionResult> CreateInitialMakeup(
         [FromBody] InitialFormulationRequest request)
-    {
-        return await CreateInitial(request, "Makeup");
-    }
+        => CreateInitialAsync(request, MakeupType);
 
     // ==========================================
     // CREATE FULL COSMETICS
@@ -190,11 +233,9 @@ public class FormulationsController : ControllerBase
 
     [HttpPost("cosmetics/full")]
     [Authorize(Policy = "Permission:Add Cosmetics")]
-    public async Task<IActionResult> CreateFullCosmetics(
+    public Task<IActionResult> CreateFullCosmetics(
         [FromBody] FullFormulationRequest request)
-    {
-        return await CreateFull(request, "Cosmetics");
-    }
+        => CreateFullAsync(request, CosmeticsType);
 
     // ==========================================
     // CREATE FULL MAKEUP
@@ -202,37 +243,30 @@ public class FormulationsController : ControllerBase
 
     [HttpPost("makeup/full")]
     [Authorize(Policy = "Permission:Add Makeup")]
-    public async Task<IActionResult> CreateFullMakeup(
+    public Task<IActionResult> CreateFullMakeup(
         [FromBody] FullFormulationRequest request)
-    {
-        return await CreateFull(request, "Makeup");
-    }
+        => CreateFullAsync(request, MakeupType);
 
     // ==========================================
-    // CREATE INITIAL FORMULATION
+    // SHARED: CREATE INITIAL
     // ==========================================
 
-    private async Task<IActionResult> CreateInitial(
+    private async Task<IActionResult> CreateInitialAsync(
         InitialFormulationRequest request,
         string type)
     {
-        var sfg = request.SFG.Trim().ToUpperInvariant();
+        var sfg = request.SFG?.Trim().ToUpperInvariant() ?? string.Empty;
 
-        var exists = await _context.Formulations
-            .AnyAsync(f => f.SFG == sfg);
+        if (string.IsNullOrWhiteSpace(sfg))
+            return BadRequest(new { message = "SFG is required." });
 
-        if (exists)
-        {
-            return Conflict(new
-            {
-                message = $"Formulation {sfg} already exists."
-            });
-        }
+        if (await _context.Formulations.AnyAsync(f => f.SFG == sfg))
+            return Conflict(new { message = $"Formulation {sfg} already exists." });
 
         var formulation = new Formulation
         {
             SFG = sfg,
-            Description = request.Description.Trim(),
+            Description = request.Description?.Trim() ?? string.Empty,
             ParentCode = string.Empty,
             Type = type,
             Status = request.Status,
@@ -254,57 +288,55 @@ public class FormulationsController : ControllerBase
                     formulation.Description,
                     formulation.Type,
                     formulation.Status,
-                    RawMaterials = new object[] { }
+                    RawMaterials = Array.Empty<object>()
                 }
-            }
-        ));
+            }));
 
         await _context.SaveChangesAsync();
 
-        return Ok(ToResponse(formulation));
+        return Ok(ToResponse(formulation, includeRawMaterials: true));
     }
 
     // ==========================================
-    // CREATE FULL FORMULATION
+    // SHARED: CREATE FULL
     // ==========================================
 
-    private async Task<IActionResult> CreateFull(
+    private async Task<IActionResult> CreateFullAsync(
         FullFormulationRequest request,
         string type)
     {
-        var sfg = request.SFG.Trim().ToUpperInvariant();
+        var sfg = request.SFG?.Trim().ToUpperInvariant() ?? string.Empty;
 
-        var exists = await _context.Formulations
-            .AnyAsync(f => f.SFG == sfg);
+        if (string.IsNullOrWhiteSpace(sfg))
+            return BadRequest(new { message = "SFG is required." });
 
-        if (exists)
-        {
-            return Conflict(new
-            {
-                message = $"Formulation {sfg} already exists."
-            });
-        }
+        if (await _context.Formulations.AnyAsync(f => f.SFG == sfg))
+            return Conflict(new { message = $"Formulation {sfg} already exists." });
+
+        var rawMaterialsResult = ValidateAndNormalizeRawMaterials(request.RawMaterials);
+
+        if (!rawMaterialsResult.IsValid)
+            return BadRequest(new { message = rawMaterialsResult.Error });
 
         var formulation = new Formulation
         {
             SFG = sfg,
-            ParentCode = request.ParentCode.Trim(),
-            Description = request.Description.Trim(),
+            ParentCode = request.ParentCode?.Trim() ?? string.Empty,
+            Description = request.Description?.Trim() ?? string.Empty,
             Type = type,
             Status = request.Status,
             LastModified = DateTime.UtcNow
         };
 
-        foreach (var item in request.RawMaterials)
+        foreach (var item in rawMaterialsResult.Items!)
         {
-            formulation.RawMaterials.Add(
-                new FormulationRawMaterial
-                {
-                    SFG = sfg,
-                    Code = item.Code.Trim().ToUpperInvariant(),
-                    Description = item.Description.Trim(),
-                    Percentage = item.Percentage
-                });
+            formulation.RawMaterials.Add(new FormulationRawMaterial
+            {
+                SFG = sfg,
+                Code = item.Code,
+                Description = item.Description,
+                Percentage = item.Percentage
+            });
         }
 
         _context.Formulations.Add(formulation);
@@ -323,53 +355,43 @@ public class FormulationsController : ControllerBase
                     formulation.Type,
                     formulation.Status,
                     RawMaterials = formulation.RawMaterials
-                        .Select(rm => new
-                        {
-                            rm.Code,
-                            rm.Description,
-                            rm.Percentage
-                        })
+                        .Select(rm => new { rm.Code, rm.Description, rm.Percentage })
                         .ToList()
                 }
-            }
-        ));
+            }));
 
         await _context.SaveChangesAsync();
 
-        return Ok(ToResponse(formulation));
+        return Ok(ToResponse(formulation, includeRawMaterials: true));
     }
 
     // ==========================================
-    // EDIT COSMETICS FORMULATION
+    // EDIT COSMETICS
     // ==========================================
 
     [HttpPut("cosmetics/{sfg}")]
     [Authorize(Policy = "Permission:Edit Cosmetics")]
-    public async Task<IActionResult> EditCosmetics(
+    public Task<IActionResult> EditCosmetics(
         string sfg,
         [FromBody] EditFormulationRequest request)
-    {
-        return await EditFormulation(sfg, request, "Cosmetics");
-    }
+        => EditFormulationAsync(sfg, request, CosmeticsType);
 
     // ==========================================
-    // EDIT MAKEUP FORMULATION
+    // EDIT MAKEUP
     // ==========================================
 
     [HttpPut("makeup/{sfg}")]
     [Authorize(Policy = "Permission:Edit Makeup")]
-    public async Task<IActionResult> EditMakeup(
+    public Task<IActionResult> EditMakeup(
         string sfg,
         [FromBody] EditFormulationRequest request)
-    {
-        return await EditFormulation(sfg, request, "Makeup");
-    }
+        => EditFormulationAsync(sfg, request, MakeupType);
 
     // ==========================================
-    // EDIT FORMULATION DATA + AUDIT LOG
+    // SHARED: EDIT FORMULATION
     // ==========================================
 
-    private async Task<IActionResult> EditFormulation(
+    private async Task<IActionResult> EditFormulationAsync(
         string sfg,
         EditFormulationRequest request,
         string expectedType)
@@ -381,106 +403,70 @@ public class FormulationsController : ControllerBase
             .FirstOrDefaultAsync(f => f.SFG == sfg);
 
         if (formulation == null || formulation.Type != expectedType)
-        {
             return NotFound(new
             {
                 message = $"Formulation {sfg} was not found in this category."
             });
-        }
+
+        var rawMaterialsResult = ValidateAndNormalizeRawMaterials(request.RawMaterials);
+
+        if (!rawMaterialsResult.IsValid)
+            return BadRequest(new { message = rawMaterialsResult.Error });
+
+        var newParentCode = request.ParentCode?.Trim() ?? string.Empty;
+        var newDescription = request.Description?.Trim() ?? string.Empty;
 
         var oldParentCode = formulation.ParentCode;
         var oldDescription = formulation.Description;
 
         var oldRawMaterials = formulation.RawMaterials
             .OrderBy(rm => rm.Code)
-            .Select(rm => new
-            {
-                rm.Code,
-                rm.Description,
-                rm.Percentage
-            })
+            .Select(rm => new { rm.Code, rm.Description, rm.Percentage })
             .ToList();
 
-        var newRawMaterials = request.RawMaterials
-            .Select(rm => new
-            {
-                Code = rm.Code.Trim().ToUpperInvariant(),
-                Description = rm.Description.Trim(),
-                rm.Percentage
-            })
+        var newRawMaterials = rawMaterialsResult.Items!
             .OrderBy(rm => rm.Code)
+            .Select(rm => new { rm.Code, rm.Description, rm.Percentage })
             .ToList();
 
         var changes = new Dictionary<string, object?>();
 
-        if (oldParentCode != request.ParentCode.Trim())
-        {
-            changes["ParentCode"] = new
-            {
-                Old = oldParentCode,
-                New = request.ParentCode.Trim()
-            };
-        }
+        if (oldParentCode != newParentCode)
+            changes["ParentCode"] = new { Old = oldParentCode, New = newParentCode };
 
-        if (oldDescription != request.Description.Trim())
-        {
-            changes["Description"] = new
-            {
-                Old = oldDescription,
-                New = request.Description.Trim()
-            };
-        }
+        if (oldDescription != newDescription)
+            changes["Description"] = new { Old = oldDescription, New = newDescription };
 
-        if (JsonSerializer.Serialize(oldRawMaterials) !=
-            JsonSerializer.Serialize(newRawMaterials))
-        {
-            changes["RawMaterials"] = new
-            {
-                Old = oldRawMaterials,
-                New = newRawMaterials
-            };
-        }
+        var rawMaterialsChanged =
+            JsonSerializer.Serialize(oldRawMaterials) !=
+            JsonSerializer.Serialize(newRawMaterials);
+
+        if (rawMaterialsChanged)
+            changes["RawMaterials"] = new { Old = oldRawMaterials, New = newRawMaterials };
 
         if (changes.Count == 0)
-        {
-            return Ok(ToResponse(formulation));
-        }
+            return Ok(ToResponse(formulation, includeRawMaterials: true));
 
-        formulation.ParentCode = request.ParentCode.Trim();
-        formulation.Description = request.Description.Trim();
+        formulation.ParentCode = newParentCode;
+        formulation.Description = newDescription;
 
-        _context.FormulationRawMaterials.RemoveRange(
-            formulation.RawMaterials);
-
-        formulation.RawMaterials.Clear();
-
-        foreach (var item in newRawMaterials)
-        {
-            formulation.RawMaterials.Add(
-                new FormulationRawMaterial
-                {
-                    SFG = formulation.SFG,
-                    Code = item.Code,
-                    Description = item.Description,
-                    Percentage = item.Percentage
-                });
-        }
+        if (rawMaterialsChanged)
+            SyncRawMaterials(formulation, rawMaterialsResult.Items!);
 
         formulation.LastModified = DateTime.UtcNow;
 
         _context.AuditLogs.Add(CreateAuditLog(
             "Updated",
             formulation,
-            changes: changes
-        ));
+            changes: changes));
 
         await _context.SaveChangesAsync();
 
-        return Ok(ToResponse(formulation));
+        return Ok(ToResponse(formulation, includeRawMaterials: true));
     }
 
     // ==========================================
-    // CHANGE FORMULATION STATUS + AUDIT LOG
+    // CHANGE STATUS
     // ==========================================
 
     [HttpPut("{sfg}/status")]
@@ -495,109 +481,33 @@ public class FormulationsController : ControllerBase
             .FirstOrDefaultAsync(f => f.SFG == sfg);
 
         if (formulation == null)
-        {
-            return NotFound(new
-            {
-                message = $"Formulation {sfg} was not found."
-            });
-        }
+            return NotFound(new { message = $"Formulation {sfg} was not found." });
 
-        var allowedStatuses = new[]
-        {
-            "Still",
-            "Uploading",
-            "Production",
-            "Done",
-            "Modification",
-            "Problem"
-        };
-
-        var targetStatus = allowedStatuses.FirstOrDefault(
-            status => string.Equals(
-                status,
-                request.Status?.Trim(),
-                StringComparison.OrdinalIgnoreCase));
+        var targetStatus = AllowedStatuses.FirstOrDefault(
+            s => string.Equals(s, request.Status?.Trim(), StringComparison.OrdinalIgnoreCase));
 
         if (targetStatus == null)
-        {
-            return BadRequest(new
-            {
-                message = "Invalid status."
-            });
-        }
+            return BadRequest(new { message = "Invalid status." });
 
         var currentStatus = formulation.Status;
 
         if (currentStatus == targetStatus)
-        {
             return BadRequest(new
             {
                 message = $"Formulation is already in status {currentStatus}."
             });
-        }
 
-        string? requiredPermission;
+        var permissionResult = ResolveRequiredPermission(
+            formulation.Type, currentStatus, targetStatus);
 
-        if (targetStatus is "Modification" or "Problem")
-        {
-            requiredPermission = formulation.Type switch
-            {
-                "Cosmetics" => "Permission:Edit Cosmetics",
-                "Makeup" => "Permission:Edit Makeup",
-                _ => null
-            };
-
-            if (requiredPermission == null)
-            {
-                return BadRequest(new
-                {
-                    message = "Formulation type is not classified."
-                });
-            }
-        }
-        else
-        {
-            var validTransition = (currentStatus, targetStatus) switch
-            {
-                ("Still", "Uploading") => true,
-                ("Uploading", "Production") => true,
-                ("Production", "Done") => true,
-                _ => false
-            };
-
-            if (!validTransition)
-            {
-                return BadRequest(new
-                {
-                    message =
-                        $"Transition from {currentStatus} to {targetStatus} is not allowed."
-                });
-            }
-
-            requiredPermission = targetStatus switch
-            {
-                "Uploading" => "Permission:Uploading",
-                "Production" => "Permission:Uploading",
-                "Done" => "Permission:Production",
-                _ => null
-            };
-        }
-
-        if (requiredPermission == null)
-        {
-            return BadRequest(new
-            {
-                message = "No permission rule exists for this transition."
-            });
-        }
+        if (!permissionResult.Success)
+            return BadRequest(new { message = permissionResult.Error });
 
         var authorizationResult = await _authorizationService
-            .AuthorizeAsync(User, requiredPermission);
+            .AuthorizeAsync(User, permissionResult.Permission!);
 
         if (!authorizationResult.Succeeded)
-        {
             return Forbid();
-        }
 
         formulation.Status = targetStatus;
         formulation.LastModified = DateTime.UtcNow;
@@ -609,13 +519,8 @@ public class FormulationsController : ControllerBase
             newStatus: targetStatus,
             changes: new
             {
-                Status = new
-                {
-                    Old = currentStatus,
-                    New = targetStatus
-                }
-            }
-        ));
+                Status = new { Old = currentStatus, New = targetStatus }
+            }));
 
         await _context.SaveChangesAsync();
 
@@ -628,106 +533,42 @@ public class FormulationsController : ControllerBase
     }
 
     // ==========================================
-    // DELETE COSMETICS + AUDIT LOG
+    // DELETE COSMETICS
     // ==========================================
 
     [HttpDelete("cosmetics/{sfg}")]
-    [Authorize]
-    public async Task<IActionResult> DeleteCosmetics(string sfg)
-    {
-        var authorizationResult = await _authorizationService.AuthorizeAsync(
-            User,
-            "Permission:Delete Cosmetics"
-        );
-
-        if (!authorizationResult.Succeeded)
-        {
-            return Forbid();
-        }
-
-        sfg = sfg.Trim().ToUpperInvariant();
-
-        var formulation = await _context.Formulations
-            .Include(f => f.RawMaterials)
-            .FirstOrDefaultAsync(
-                f => f.SFG == sfg && f.Type == "Cosmetics");
-
-        if (formulation == null)
-        {
-            return NotFound(new
-            {
-                message = $"Cosmetics formulation {sfg} was not found."
-            });
-        }
-
-        _context.AuditLogs.Add(CreateAuditLog(
-            "Deleted",
-            formulation,
-            oldStatus: formulation.Status,
-            changes: new
-            {
-                DeletedValues = new
-                {
-                    formulation.SFG,
-                    formulation.ParentCode,
-                    formulation.Description,
-                    formulation.Type,
-                    formulation.Status,
-                    RawMaterials = formulation.RawMaterials
-                        .Select(rm => new
-                        {
-                            rm.Code,
-                            rm.Description,
-                            rm.Percentage
-                        })
-                        .ToList()
-                }
-            }
-        ));
-
-        _context.Formulations.Remove(formulation);
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
-        {
-            message = $"Cosmetics formulation {sfg} was deleted successfully.",
-            sfg
-        });
-    }
+    [Authorize(Policy = "Permission:Delete Cosmetics")]
+    public Task<IActionResult> DeleteCosmetics(string sfg)
+        => DeleteFormulationAsync(sfg, CosmeticsType);
 
     // ==========================================
-    // DELETE MAKEUP + AUDIT LOG
+    // DELETE MAKEUP
     // ==========================================
 
     [HttpDelete("makeup/{sfg}")]
-    [Authorize]
-    public async Task<IActionResult> DeleteMakeup(string sfg)
+    [Authorize(Policy = "Permission:Delete Makeup")]
+    public Task<IActionResult> DeleteMakeup(string sfg)
+        => DeleteFormulationAsync(sfg, MakeupType);
+
+    // ==========================================
+    // SHARED: DELETE FORMULATION
+    // ==========================================
+
+    private async Task<IActionResult> DeleteFormulationAsync(
+        string sfg,
+        string type)
     {
-        var authorizationResult = await _authorizationService.AuthorizeAsync(
-            User,
-            "Permission:Delete Makeup"
-        );
-
-        if (!authorizationResult.Succeeded)
-        {
-            return Forbid();
-        }
-
         sfg = sfg.Trim().ToUpperInvariant();
 
         var formulation = await _context.Formulations
             .Include(f => f.RawMaterials)
-            .FirstOrDefaultAsync(
-                f => f.SFG == sfg && f.Type == "Makeup");
+            .FirstOrDefaultAsync(f => f.SFG == sfg && f.Type == type);
 
         if (formulation == null)
-        {
             return NotFound(new
             {
-                message = $"Makeup formulation {sfg} was not found."
+                message = $"{type} formulation {sfg} was not found."
             });
-        }
 
         _context.AuditLogs.Add(CreateAuditLog(
             "Deleted",
@@ -743,31 +584,125 @@ public class FormulationsController : ControllerBase
                     formulation.Type,
                     formulation.Status,
                     RawMaterials = formulation.RawMaterials
-                        .Select(rm => new
-                        {
-                            rm.Code,
-                            rm.Description,
-                            rm.Percentage
-                        })
+                        .Select(rm => new { rm.Code, rm.Description, rm.Percentage })
                         .ToList()
                 }
-            }
-        ));
+            }));
 
         _context.Formulations.Remove(formulation);
-
         await _context.SaveChangesAsync();
 
         return Ok(new
         {
-            message = $"Makeup formulation {sfg} was deleted successfully.",
+            message = $"{type} formulation {sfg} was deleted successfully.",
             sfg
         });
     }
 
     // ==========================================
-    // CREATE AUDIT LOG ENTRY
+    // HELPERS
     // ==========================================
+
+    private static (bool IsValid, string? Error, List<RawMaterialRequest>? Items)
+        ValidateAndNormalizeRawMaterials(List<RawMaterialRequest>? rawMaterials)
+    {
+        if (rawMaterials == null || rawMaterials.Count == 0)
+            return (false, "At least one raw material is required.", null);
+
+        var normalized = new List<RawMaterialRequest>(rawMaterials.Count);
+
+        foreach (var item in rawMaterials)
+        {
+            var code = item.Code?.Trim().ToUpperInvariant() ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(code))
+                return (false, "Raw material code is required.", null);
+
+            normalized.Add(new RawMaterialRequest
+            {
+                Code = code,
+                Description = item.Description?.Trim() ?? string.Empty,
+                Percentage = item.Percentage
+            });
+        }
+
+        var totalPercentage = normalized.Sum(rm => rm.Percentage);
+
+        if (Math.Abs(totalPercentage - 100m) > 0.01m)
+            return (false,
+                $"Raw material percentages must sum to 100. Current total: {totalPercentage}.",
+                null);
+
+        return (true, null, normalized);
+    }
+
+    private void SyncRawMaterials(
+        Formulation formulation,
+        List<RawMaterialRequest> newItems)
+    {
+        // حذف صريح من الـ DbContext عشان نضمن إن EF يعمل DELETE
+        var existing = formulation.RawMaterials.ToList();
+
+        _context.FormulationRawMaterials.RemoveRange(existing);
+
+        formulation.RawMaterials.Clear();
+
+        foreach (var item in newItems)
+        {
+            formulation.RawMaterials.Add(new FormulationRawMaterial
+            {
+                SFG = formulation.SFG,
+                Code = item.Code,
+                Description = item.Description,
+                Percentage = item.Percentage
+            });
+        }
+    }
+
+    private static (bool Success, string? Permission, string? Error)
+        ResolveRequiredPermission(
+            string? formulationType,
+            string currentStatus,
+            string targetStatus)
+    {
+        if (targetStatus is "Modification" or "Problem")
+        {
+            var permission = formulationType switch
+            {
+                CosmeticsType => "Permission:Edit Cosmetics",
+                MakeupType => "Permission:Edit Makeup",
+                _ => null
+            };
+
+            return permission == null
+                ? (false, null, "Formulation type is not classified.")
+                : (true, permission, null);
+        }
+
+        var validTransition = (currentStatus, targetStatus) switch
+        {
+            ("Still", "Uploading") => true,
+            ("Uploading", "Production") => true,
+            ("Production", "Done") => true,
+            _ => false
+        };
+
+        if (!validTransition)
+            return (false, null,
+                $"Transition from {currentStatus} to {targetStatus} is not allowed.");
+
+        var transitionPermission = targetStatus switch
+        {
+            "Uploading" => "Permission:Uploading",
+            "Production" => "Permission:Uploading",
+            "Done" => "Permission:Production",
+            _ => null
+        };
+
+        return transitionPermission == null
+            ? (false, null, "No permission rule exists for this transition.")
+            : (true, transitionPermission, null);
+    }
 
     private AuditLog CreateAuditLog(
         string action,
@@ -781,31 +716,20 @@ public class FormulationsController : ControllerBase
             SFG = formulation.SFG,
             Type = formulation.Type,
             Action = action,
-
-            ChangedByUserId = User.FindFirstValue(
-                ClaimTypes.NameIdentifier),
-
-            ChangedByUsername = User.FindFirstValue(
-                ClaimTypes.Name),
-
+            ChangedByUserId = User.FindFirstValue(ClaimTypes.NameIdentifier),
+            ChangedByUsername = User.FindFirstValue(ClaimTypes.Name),
             ChangedAt = DateTime.UtcNow,
             OldStatus = oldStatus,
             NewStatus = newStatus,
-
-            ChangesJson = changes == null
-                ? null
-                : JsonSerializer.Serialize(changes)
+            ChangesJson = changes == null ? null : JsonSerializer.Serialize(changes)
         };
     }
 
-    // ==========================================
-    // MAP FORMULATION TO RESPONSE DTO
-    // ==========================================
-
     private static FormulationResponseDto ToResponse(
-        Formulation formulation)
+        Formulation formulation,
+        bool includeRawMaterials = false)
     {
-        return new FormulationResponseDto
+        var dto = new FormulationResponseDto
         {
             SFG = formulation.SFG,
             ParentCode = formulation.ParentCode,
@@ -813,8 +737,13 @@ public class FormulationsController : ControllerBase
             Type = formulation.Type,
             Status = formulation.Status,
             LastModified = formulation.LastModified,
+            RawMaterials = new List<RawMaterialResponseDto>()
+        };
 
-            RawMaterials = formulation.RawMaterials
+        if (includeRawMaterials && formulation.RawMaterials != null)
+        {
+            dto.RawMaterials = formulation.RawMaterials
+                .OrderBy(rm => rm.Code)
                 .Select(rm => new RawMaterialResponseDto
                 {
                     Id = rm.Id,
@@ -822,7 +751,9 @@ public class FormulationsController : ControllerBase
                     Description = rm.Description,
                     Percentage = rm.Percentage
                 })
-                .ToList()
-        };
+                .ToList();
+        }
+
+        return dto;
     }
 }

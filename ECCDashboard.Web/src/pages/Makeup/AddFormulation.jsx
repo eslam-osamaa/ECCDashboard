@@ -1,6 +1,7 @@
-
 import AddFormulation from "../Cosmetics/AddFormulation";
 
-export default function AddMakeupFormulation() {
+function AddMakeupFormulation() {
   return <AddFormulation type="Makeup" />;
 }
+
+export default AddMakeupFormulation;

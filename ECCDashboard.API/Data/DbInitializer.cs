@@ -7,21 +7,9 @@ namespace ECCDashboard.API.Data;
 
 public static class DbInitializer
 {
-    public static async Task InitializeAsync(
-        IServiceProvider services)
+    public static async Task InitializeAsync(IServiceProvider services)
     {
-        using var scope = services.CreateScope();
-
-        var context = scope.ServiceProvider
-            .GetRequiredService<AppDbContext>();
-
-        var passwordHasher = scope.ServiceProvider
-            .GetRequiredService<IPasswordHasher<User>>();
-
-        var configuration = scope.ServiceProvider
-            .GetRequiredService<IConfiguration>();
-
-        await context.Database.MigrateAsync();
+        using var scope = services.CreateScope(); var context = scope.ServiceProvider.GetRequiredService<AppDbContext>(); var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>(); var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>(); var useSqlServer = configuration.GetValue<bool>("UseSqlServer"); if (useSqlServer) { var sqlServerContext = scope.ServiceProvider.GetRequiredService<SqlServerAppDbContext>(); await sqlServerContext.Database.MigrateAsync(); } else { await context.Database.MigrateAsync(); }
 
         // ==========================================
         // DEFAULT ROLES

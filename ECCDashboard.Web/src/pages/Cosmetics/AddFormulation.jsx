@@ -1,4 +1,3 @@
-
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -176,12 +175,6 @@ function AddFormulation({ type = "Cosmetics" }) {
       Object.values(row).some(Boolean)
     );
 
-    const codes = rawMaterials
-      .map((rm) => rm.code.trim().toUpperCase())
-      .filter(Boolean);
-
-    const hasDuplicateRM = new Set(codes).size !== codes.length;
-
     if (rawMaterials.length === 0) {
       return {
         valid: false,
@@ -196,12 +189,7 @@ function AddFormulation({ type = "Cosmetics" }) {
       };
     }
 
-    if (hasDuplicateRM) {
-      return {
-        valid: false,
-        message: "Each Raw Material Code must be unique.",
-      };
-    }
+    // ❌ شيلنا التحقق من تكرار RM Code
 
     if (Math.abs(totalPercentage - 100) > 0.0001) {
       return {

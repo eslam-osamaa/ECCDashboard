@@ -1,4 +1,3 @@
-
 import { FaEye, FaEdit, FaSave } from "react-icons/fa";
 import Spinner from "../Common/Spinner";
 
@@ -11,7 +10,12 @@ export default function FormulationActions({
   onPreview,
   onBackToEdit,
   onSave,
+  isEditMode = false,
 }) {
+  const saveLabel = isEditMode
+    ? "Update Formulation"
+    : "Save Formulation";
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -53,7 +57,7 @@ export default function FormulationActions({
               type="button"
               onClick={onSave}
               disabled={!canSave}
-              title={!canSave ? validationMessage : "Save formulation"}
+              title={!canSave ? validationMessage : saveLabel}
               className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500 disabled:shadow-none"
             >
               {saving ? (
@@ -64,7 +68,7 @@ export default function FormulationActions({
               ) : (
                 <>
                   <FaSave />
-                  Save Formulation
+                  {saveLabel}
                 </>
               )}
             </button>

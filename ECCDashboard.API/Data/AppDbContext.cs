@@ -1,3 +1,4 @@
+
 using ECCDashboard.API.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,16 +19,17 @@ public class AppDbContext : DbContext
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
-    public DbSet<AuditLog> AuditLogs { get; set; }
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        ConfigureModel(modelBuilder);
+    }
 
-        // ==========================================
+    public static void ConfigureModel(ModelBuilder modelBuilder)
+    {
         // FORMULATION
-        // ==========================================
-
         modelBuilder.Entity<Formulation>()
             .HasKey(f => f.SFG);
 
@@ -47,11 +49,7 @@ public class AppDbContext : DbContext
             .Property(f => f.Status)
             .IsRequired();
 
-
-        // ==========================================
         // FORMULATION RAW MATERIALS
-        // ==========================================
-
         modelBuilder.Entity<FormulationRawMaterial>()
             .HasOne(rm => rm.Formulation)
             .WithMany(f => f.RawMaterials)
@@ -71,11 +69,7 @@ public class AppDbContext : DbContext
             .Property(rm => rm.Percentage)
             .HasPrecision(10, 4);
 
-
-        // ==========================================
         // USER
-        // ==========================================
-
         modelBuilder.Entity<User>()
             .HasKey(u => u.Id);
 
@@ -110,10 +104,8 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(u => u.LastModifiedByUserId)
             .OnDelete(DeleteBehavior.Restrict);
-        // ==========================================
-        // ROLE
-        // ==========================================
 
+        // ROLE
         modelBuilder.Entity<Role>()
             .HasKey(r => r.Id);
 
@@ -125,11 +117,7 @@ public class AppDbContext : DbContext
             .Property(r => r.Name)
             .IsRequired();
 
-
-        // ==========================================
         // USER ROLE
-        // ==========================================
-
         modelBuilder.Entity<UserRole>()
             .HasKey(ur => new
             {
@@ -148,10 +136,8 @@ public class AppDbContext : DbContext
             .WithMany(r => r.UserRoles)
             .HasForeignKey(ur => ur.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
-        // ==========================================
-        // PERMISSION
-        // ==========================================
 
+        // PERMISSION
         modelBuilder.Entity<Permission>()
             .HasKey(p => p.Id);
 
@@ -163,11 +149,7 @@ public class AppDbContext : DbContext
             .Property(p => p.Name)
             .IsRequired();
 
-
-        // ==========================================
         // ROLE PERMISSION
-        // ==========================================
-
         modelBuilder.Entity<RolePermission>()
             .HasKey(rp => new
             {

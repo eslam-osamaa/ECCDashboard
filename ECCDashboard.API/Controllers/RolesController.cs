@@ -30,7 +30,8 @@ public class RolesController : ControllerBase
     [HttpGet]
     [Authorize(Roles = Roles.Administrator + "," + Roles.UserManagement)]
     public async Task<IActionResult> GetRoles(
-        [FromQuery] PaginationRequest request)
+        [FromQuery] PaginationRequest request,
+        [FromQuery] string? search = null)
     {
         var page = request.Page < 1 ? 1 : request.Page;
 
@@ -38,12 +39,28 @@ public class RolesController : ControllerBase
             ? 10
             : Math.Min(request.PageSize, 100);
 
+        // Base query
         var query = _context.Roles
-            .AsNoTracking()
-            .OrderByDescending(r => r.LastModified);
+            .AsNoTracking();
 
+        // Search by role name
+        // Case-insensitive + partial match
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var searchTerm = search.Trim().ToLower();
+
+            query = query.Where(r =>
+                r.Name != null &&
+                r.Name.ToLower().Contains(searchTerm));
+        }
+
+        // Apply sorting after filtering
+        query = query.OrderByDescending(r => r.LastModified);
+
+        // Count filtered results before pagination
         var totalCount = await query.CountAsync();
 
+        // Apply pagination and select role data
         var roles = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -282,7 +299,7 @@ public class RolesController : ControllerBase
         role.Name = roleName;
         role.LastModified = DateTime.UtcNow;
 
-        // PermissionIds was provided
+        // Update permissions if PermissionIds was provided
         if (request.PermissionIds != null)
         {
             var permissionIds = request.PermissionIds
@@ -397,4 +414,3 @@ public class RolesController : ControllerBase
         });
     }
 }
-

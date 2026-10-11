@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import formulationsService from "../../services/formulations/formulationsService";
 import SFGFilters from "../SFGTable/SFGFilters";
 import SFGTable from "../SFGTable/SFGTable";
-
-const PAGE_SIZE = 10;
 
 function formatDate(value) {
   if (!value) return "-";
@@ -23,15 +22,23 @@ function formatDate(value) {
 }
 
 function FormulationsPage({ type }) {
+  const location = useLocation();
+
   const [data, setData] = useState([]);
   const [search, setSearch] = useState("");
+  const [description, setDescription] = useState("");
   const [parentCode, setParentCode] = useState("");
   const [status, setStatus] = useState("all");
 
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // ✅ عشان نعمل refetch بعد الحذف أو التعديل
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -45,8 +52,9 @@ function FormulationsPage({ type }) {
           type,
           {
             page,
-            pageSize: PAGE_SIZE,
+            pageSize,
             search: search.trim() || undefined,
+            description: description.trim() || undefined,
             parentCode: parentCode.trim() || undefined,
             status: status === "all" ? undefined : status,
           },
@@ -60,21 +68,12 @@ function FormulationsPage({ type }) {
             description: item.description ?? "",
             status: item.status ?? "Still",
             lastModified: formatDate(item.lastModified),
-            rawMaterials: (item.rawMaterials ?? []).map((rm) => ({
-              id: rm.id,
-              code: rm.code,
-              description: rm.description,
-              percentage: rm.percentage,
-            })),
           }))
         );
 
         setTotalCount(result.totalCount ?? 0);
       } catch (err) {
-        if (
-          controller.signal.aborted ||
-          err.code === "ERR_CANCELED"
-        ) {
+        if (controller.signal.aborted || err.code === "ERR_CANCELED") {
           return;
         }
 
@@ -96,11 +95,26 @@ function FormulationsPage({ type }) {
     fetchFormulations();
 
     return () => controller.abort();
-  }, [type, search, parentCode, status, page]);
+  }, [
+    type,
+    search,
+    description,
+    parentCode,
+    status,
+    page,
+    pageSize,
+    location.state,
+    refreshKey, // ✅ ضيفنا دي
+  ]);
 
   const updateSearch = (value) => {
     setPage(1);
     setSearch(value);
+  };
+
+  const updateDescription = (value) => {
+    setPage(1);
+    setDescription(value);
   };
 
   const updateParentCode = (value) => {
@@ -113,16 +127,30 @@ function FormulationsPage({ type }) {
     setStatus(value);
   };
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(totalCount / PAGE_SIZE)
-  );
+  const updatePageSize = (value) => {
+    setPageSize(value);
+    setPage(1);
+  };
+
+  // ✅ بعد الحذف → نعمل refetch
+  const handleDeleted = () => {
+    // لو الحذف كان آخر عنصر في الصفحة، رجّع صفحة لورا
+    if (data.length === 1 && page > 1) {
+      setPage((prev) => prev - 1);
+    }
+
+    setRefreshKey((prev) => prev + 1);
+  };
+
+  const totalPages = Math.ceil(totalCount / pageSize);
 
   return (
     <div className="space-y-6">
       <SFGFilters
         search={search}
         setSearch={updateSearch}
+        description={description}
+        setDescription={updateDescription}
         parentCode={parentCode}
         setParentCode={updateParentCode}
         status={status}
@@ -143,48 +171,18 @@ function FormulationsPage({ type }) {
           Loading {type} formulations...
         </div>
       ) : (
-        <>
-<SFGTable
-  data={data}
-  totalCount={totalCount}
-  page={page}
-  totalPages={totalPages}
-  onPageChange={setPage}
-  type={type}
-/>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-slate-500">
-              Page {page} of {totalPages}
-              {" · "}
-              {totalCount} formulations
-            </span>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() =>
-                  setPage((current) => current - 1)
-                }
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Previous
-              </button>
-
-              <button
-                type="button"
-                disabled={page >= totalPages}
-                onClick={() =>
-                  setPage((current) => current + 1)
-                }
-                className="rounded-lg border border-slate-200 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </>
+        <SFGTable
+          data={data}
+          totalCount={totalCount}
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={updatePageSize}
+          loading={loading}
+          type={type}
+          onDeleted={handleDeleted} // ✅ ضيفنا دي
+        />
       )}
     </div>
   );
