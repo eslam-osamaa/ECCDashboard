@@ -36,3 +36,6 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+# Config with secrets
+ECCDashboard.API/appsettings.json
+ECCDashboard.API/appsettings.Development.json
